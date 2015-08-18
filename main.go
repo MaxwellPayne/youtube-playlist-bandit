@@ -32,8 +32,13 @@ const (
   ffmpeg = "ffmpeg"
 )
 
-var dirname string = "outfiles"
-var googleAPIKey string
+var (
+  dirname       string = "outfiles"
+  googleAPIKey  string
+  shouldConvert bool   = true
+  Artist        string = ""
+  Album         string = ""
+)
 
 func init() {
   // Check for command-line dependencies
@@ -95,7 +100,11 @@ func main() {
   for _, video := range playlistItems {
     wg.Add(1)
     go func(v *OrderedPlaylistItem) {
-      e := v.Download()
+      var e error = v.Download()
+      if shouldConvert && e == nil {
+        e = v.ConvertToMp3(Artist, Album)
+        os.Remove(v.M4aFname())
+      }
       if e != nil {
         fmt.Println(e.Error())
       }
@@ -106,18 +115,33 @@ func main() {
   
 }
 
+func (video *OrderedPlaylistItem) M4aFname() string {
+  return filepath.Join(dirname, fmt.Sprintf("%d - %s.m4a", video.PositionInPlaylist, video.Snippet.Title))
+}
+
+func (video *OrderedPlaylistItem) Mp3Fname() string {
+  return strings.TrimSuffix(video.M4aFname(), "m4a") + "mp3"
+}
+
+func (video *OrderedPlaylistItem) ConvertToMp3(artist, album string) error {
+  if _, err := os.Stat(video.M4aFname()); os.IsNotExist(err) {
+    return err
+  }
+  cmd := exec.Command(ffmpeg, "-i", video.M4aFname(), "-acodec", "libmp3lame", "-ab", "128k", video.Mp3Fname())
+  _, err := cmd.Output()
+  return err
+}
+
 func (video *OrderedPlaylistItem) Download() error {
   if video.RetriesLeft < 1 {
     // look for the recursive base case, exit if max retries exceeded
     return fmt.Errorf("Exceeded maximum retries for video %s", video.ContentDetails.VideoId)
   }
-  fname := filepath.Join(dirname, fmt.Sprintf("%d - %s.m4a", video.PositionInPlaylist, video.Snippet.Title))
-  cmd := exec.Command(youtubeDl, "-o", fname, "https://youtube.com/watch?v="+video.ContentDetails.VideoId, "-f", "141/140")
+  cmd := exec.Command(youtubeDl, "-o", video.M4aFname(), "https://youtube.com/watch?v="+video.ContentDetails.VideoId, "-f", "141/140")
   output, err := cmd.Output()
   fmt.Println(string(output))
 
-  convert := exec.Command(ffmpeg, "-i", fname, "-acodec", "libmp3lame", "-ab", "128k", strings.Replace(fname, ".m4a", ".mp3", 1))
-  _, err = convert.Output()
+
 
   if err == nil {
     return nil
