@@ -5,6 +5,7 @@ import (
   "fmt"
   "sync"
   "os"
+  "syscall"
   "log"
   "path/filepath"
   "time"
@@ -13,6 +14,7 @@ import (
   "io/ioutil"
   "encoding/json"
   "github.com/levigross/grequests"
+  id3       "github.com/mikkyang/id3-go"
   transport "google.golang.org/api/googleapi/transport"
   youtube   "google.golang.org/api/youtube/v3"
 )
@@ -36,8 +38,8 @@ var (
   dirname       string = "outfiles"
   googleAPIKey  string
   shouldConvert bool   = true
-  Artist        string = ""
-  Album         string = ""
+  Artist        string = "Italo"
+  Album         string = "Italo Disco Heaven"
 )
 
 func init() {
@@ -52,6 +54,18 @@ func init() {
   if err := os.Mkdir(dirname, 0777); err != nil && !os.IsExist(err) {
     log.Fatal("Could not make directory", dirname, "for output files")
   }
+
+  // @hack - Increase file descriptor limt
+  const PLAYLIST_SIZE_LIMIT, SUBPROCS_PER_VIDEO = 200, 2
+  // max size of YouTubePlaylist, subprocesses needed to download and convert video
+  fdLimit := new(syscall.Rlimit)
+  err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, fdLimit)
+  fdLimit.Cur += PLAYLIST_SIZE_LIMIT * SUBPROCS_PER_VIDEO
+  err  = syscall.Setrlimit(syscall.RLIMIT_NOFILE, fdLimit)
+  if err != nil {
+    log.Fatal(err.Error())
+  }
+
   // Unpack configuration
   type config struct {
     GoogleAPIKey string `json:"google_api_key"`
@@ -129,6 +143,14 @@ func (video *OrderedPlaylistItem) ConvertToMp3(artist, album string) error {
   }
   cmd := exec.Command(ffmpeg, "-i", video.M4aFname(), "-acodec", "libmp3lame", "-ab", "128k", video.Mp3Fname())
   _, err := cmd.Output()
+  
+  mp3File, err := id3.Open(video.Mp3Fname())
+  defer mp3File.Close()
+  if err == nil {
+    mp3File.SetArtist(artist)
+    mp3File.SetAlbum(album)
+  }
+
   return err
 }
 
@@ -147,7 +169,8 @@ func (video *OrderedPlaylistItem) Download() error {
     return nil
   } else {
     video.RetriesLeft -= 1
-    return video.Download()
+    video.Download()
+    return err
   }
 }
 
