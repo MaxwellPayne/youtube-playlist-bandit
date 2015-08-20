@@ -4,6 +4,7 @@ import (
   "net/http"
   "fmt"
   "sync"
+  "flag"
   "os"
   "syscall"
   "log"
@@ -26,8 +27,8 @@ var _ = time.Sleep
 var _ = strings.Replace
 
 const (
-  playlist = "PL1531805E486A97FF" // the REAL Italo
-  //playlist = "PLQh1lAYHwN7h0GJydjLRPrqghcg-_t6x_" // actually short Italo
+  //playlist = "PL1531805E486A97FF" // the REAL Italo
+  playlist = "PLQh1lAYHwN7h0GJydjLRPrqghcg-_t6x_" // actually short Italo
   //playlist = "RDmbJ0aXxpTfM" // nightcore, not Italo
   maxListItems = 50
   youtubeDl = "youtube-dl"
@@ -35,14 +36,21 @@ const (
 )
 
 var (
-  dirname       string = "outfiles"
+  // API key for YouTube calls
   googleAPIKey  string
-  shouldConvert bool   = true
-  Artist        string = "Italo"
-  Album         string = "Italo Disco Heaven"
+  // Command line argv
+  Dirname       string
+  Artist        string
+  Album         string
 )
 
 func init() {
+  // Parse args
+  flag.StringVar(&Dirname, "directory", "outfiles", "Output directory for downloaded files")
+  flag.StringVar(&Artist, "artist", "", "Artist name if songs should be tagged by artist")
+  flag.StringVar(&Album, "album", "", "Album name if songs should be tagged by album")
+  flag.Parse()
+
   // Check for command-line dependencies
   for _,dependency := range []string{youtubeDl, ffmpeg} {
     if _, err := exec.LookPath(dependency); err != nil {
@@ -51,8 +59,8 @@ func init() {
   }
 
   // Make output directory
-  if err := os.Mkdir(dirname, 0777); err != nil && !os.IsExist(err) {
-    log.Fatal("Could not make directory", dirname, "for output files")
+  if err := os.Mkdir(Dirname, 0777); err != nil && !os.IsExist(err) {
+    log.Fatal("Could not make directory", Dirname, "for output files")
   }
 
   // @hack - Increase file descriptor limt
@@ -115,7 +123,7 @@ func main() {
     wg.Add(1)
     go func(v *OrderedPlaylistItem) {
       var e error = v.Download()
-      if shouldConvert && e == nil {
+      if shouldConvert() && e == nil {
         e = v.ConvertToMp3(Artist, Album)
         os.Remove(v.M4aFname())
       }
@@ -130,7 +138,7 @@ func main() {
 }
 
 func (video *OrderedPlaylistItem) M4aFname() string {
-  return filepath.Join(dirname, fmt.Sprintf("%d - %s.m4a", video.PositionInPlaylist, video.Snippet.Title))
+  return filepath.Join(Dirname, fmt.Sprintf("%d - %s.m4a", video.PositionInPlaylist, video.Snippet.Title))
 }
 
 func (video *OrderedPlaylistItem) Mp3Fname() string {
@@ -141,14 +149,16 @@ func (video *OrderedPlaylistItem) ConvertToMp3(artist, album string) error {
   if _, err := os.Stat(video.M4aFname()); os.IsNotExist(err) {
     return err
   }
-  cmd := exec.Command(ffmpeg, "-i", video.M4aFname(), "-acodec", "libmp3lame", "-ab", "128k", video.Mp3Fname())
-  _, err := cmd.Output()
+  cmd := exec.Command(ffmpeg, "-i", video.M4aFname(), "-acodec", "libmp3lame", "-ab", "256k", video.Mp3Fname())
+  output, err := cmd.Output()
   
   mp3File, err := id3.Open(video.Mp3Fname())
   defer mp3File.Close()
   if err == nil {
     mp3File.SetArtist(artist)
     mp3File.SetAlbum(album)
+  } else {
+    fmt.Println(output)
   }
 
   return err
@@ -197,6 +207,11 @@ func playlistItemsSieve(service *youtube.Service, playlistId string, output chan
     }
   }
   close(output)
+}
+
+// tells if this program should convert to .mp3
+func shouldConvert() bool {
+  return Artist != "" || Album != ""
 }
 
 type OrderedPlaylistItem struct {
